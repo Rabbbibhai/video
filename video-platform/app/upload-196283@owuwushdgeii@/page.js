@@ -1,6 +1,6 @@
 'use client';
 import { useState, useRef } from 'react';
-import { Upload, X, CheckCircle, AlertCircle, Video } from 'lucide-react';
+import { Upload, X, CheckCircle, AlertCircle, Video, FileVideo } from 'lucide-react';
 
 export default function SecretUpload() {
   const [uploading, setUploading] = useState(false);
@@ -20,7 +20,7 @@ export default function SecretUpload() {
       if (!file.type.startsWith('video/')) {
         setUploadStatus({
           type: 'error',
-          message: 'Please select a video file (MP4, MOV, AVI, etc.)'
+          message: 'Please select a video file (MP4, MOV, AVI, MKV, WEBM)'
         });
         return;
       }
@@ -37,7 +37,7 @@ export default function SecretUpload() {
       setSelectedFile(file);
       setUploadStatus(null);
       
-      // Auto-fill title from filename
+      // Auto-fill title from filename (without extension)
       if (!videoInfo.title) {
         const fileName = file.name.replace(/\.[^/.]+$/, ""); // Remove extension
         setVideoInfo(prev => ({ ...prev, title: fileName }));
@@ -74,11 +74,15 @@ export default function SecretUpload() {
     try {
       const formData = new FormData();
       formData.append('video', selectedFile);
-      formData.append('title', videoInfo.title);
-      formData.append('description', videoInfo.description);
+      formData.append('title', videoInfo.title.trim());
+      formData.append('description', videoInfo.description.trim());
+
+      // Use the super long secret API route
+      const apiUrl = '/api/video-processor-qzk928mxn74bvcd83hw02kdpqozl16xjy59amrubt47fgse32wn85cv01pi96';
 
       const xhr = new XMLHttpRequest();
       
+      // Progress tracking
       xhr.upload.addEventListener('progress', (event) => {
         if (event.lengthComputable) {
           const percentComplete = (event.loaded / event.total) * 100;
@@ -88,20 +92,36 @@ export default function SecretUpload() {
 
       xhr.addEventListener('load', () => {
         if (xhr.status === 200) {
-          setUploadStatus({
-            type: 'success',
-            message: 'Video uploaded successfully!'
-          });
-          setSelectedFile(null);
-          setVideoInfo({ title: '', description: '' });
-          setProgress(0);
-          if (fileInputRef.current) {
-            fileInputRef.current.value = '';
+          const response = JSON.parse(xhr.responseText);
+          if (response.success) {
+            setUploadStatus({
+              type: 'success',
+              message: response.message || 'Video uploaded successfully to Backblaze B2! 🎉'
+            });
+            // Reset form
+            setSelectedFile(null);
+            setVideoInfo({ title: '', description: '' });
+            setProgress(0);
+            if (fileInputRef.current) {
+              fileInputRef.current.value = '';
+            }
+          } else {
+            setUploadStatus({
+              type: 'error',
+              message: response.error || 'Upload failed'
+            });
           }
         } else {
+          let errorMessage = 'Upload failed';
+          try {
+            const errorResponse = JSON.parse(xhr.responseText);
+            errorMessage = errorResponse.error || errorResponse.details || errorMessage;
+          } catch (e) {
+            errorMessage = `Server error: ${xhr.status}`;
+          }
           setUploadStatus({
             type: 'error',
-            message: `Upload failed: ${xhr.responseText || 'Unknown error'}`
+            message: errorMessage
           });
         }
         setUploading(false);
@@ -110,12 +130,21 @@ export default function SecretUpload() {
       xhr.addEventListener('error', () => {
         setUploadStatus({
           type: 'error',
-          message: 'Upload failed. Please check your connection.'
+          message: 'Network error: Failed to connect to server. Check your connection.'
         });
         setUploading(false);
       });
 
-      xhr.open('POST', '/api/upload');
+      xhr.addEventListener('timeout', () => {
+        setUploadStatus({
+          type: 'error',
+          message: 'Upload timeout: Please try again with a smaller file or better connection.'
+        });
+        setUploading(false);
+      });
+
+      xhr.open('POST', apiUrl);
+      xhr.timeout = 300000; // 5 minutes timeout for large files
       xhr.send(formData);
 
     } catch (error) {
@@ -135,6 +164,18 @@ export default function SecretUpload() {
     }
   };
 
+  const formatFileSize = (bytes) => {
+    if (bytes >= 1073741824) {
+      return (bytes / 1073741824).toFixed(2) + ' GB';
+    } else if (bytes >= 1048576) {
+      return (bytes / 1048576).toFixed(2) + ' MB';
+    } else if (bytes >= 1024) {
+      return (bytes / 1024).toFixed(2) + ' KB';
+    } else {
+      return bytes + ' bytes';
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 py-12">
       <div className="max-w-2xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -144,7 +185,7 @@ export default function SecretUpload() {
             <Video className="h-8 w-8 text-red-600" />
           </div>
           <h1 className="text-3xl font-bold text-gray-900 mb-2">Secret Upload Portal</h1>
-          <p className="text-gray-600">Upload videos to your private collection</p>
+          <p className="text-gray-600">Upload videos directly to Backblaze B2 cloud storage</p>
         </div>
 
         {/* Upload Card */}
@@ -155,10 +196,10 @@ export default function SecretUpload() {
               selectedFile 
                 ? 'border-green-400 bg-green-50' 
                 : 'border-gray-300 hover:border-red-400 hover:bg-red-50'
-            }`}
+            } ${uploading ? 'opacity-50 cursor-not-allowed' : ''}`}
             onDragOver={handleDragOver}
             onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => !uploading && fileInputRef.current?.click()}
           >
             <input
               type="file"
@@ -166,6 +207,7 @@ export default function SecretUpload() {
               onChange={handleFileSelect}
               accept="video/*"
               className="hidden"
+              disabled={uploading}
             />
             
             {selectedFile ? (
@@ -174,28 +216,32 @@ export default function SecretUpload() {
                 <div>
                   <p className="font-semibold text-gray-900">{selectedFile.name}</p>
                   <p className="text-sm text-gray-600">
-                    {(selectedFile.size / (1024 * 1024)).toFixed(2)} MB
+                    {formatFileSize(selectedFile.size)} • {selectedFile.type}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={(e) => { e.stopPropagation(); removeFile(); }}
-                  className="inline-flex items-center text-sm text-red-600 hover:text-red-700"
-                >
-                  <X className="h-4 w-4 mr-1" />
-                  Remove file
-                </button>
+                {!uploading && (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); removeFile(); }}
+                    className="inline-flex items-center text-sm text-red-600 hover:text-red-700"
+                  >
+                    <X className="h-4 w-4 mr-1" />
+                    Remove file
+                  </button>
+                )}
               </div>
             ) : (
               <div className="space-y-4">
                 <Upload className="h-12 w-12 text-gray-400 mx-auto" />
                 <div>
-                  <p className="font-semibold text-gray-900">Select video file</p>
+                  <p className="font-semibold text-gray-900">
+                    {uploading ? 'Upload in progress...' : 'Select video file'}
+                  </p>
                   <p className="text-sm text-gray-600">
-                    Drag & drop or click to browse
+                    {uploading ? 'Please wait...' : 'Drag & drop or click to browse'}
                   </p>
                   <p className="text-xs text-gray-500 mt-2">
-                    MP4, MOV, AVI, WEBM • Max 100MB
+                    MP4, MOV, AVI, MKV, WEBM • Max 100MB
                   </p>
                 </div>
               </div>
@@ -206,15 +252,18 @@ export default function SecretUpload() {
           {uploading && (
             <div className="mt-6">
               <div className="flex justify-between text-sm text-gray-600 mb-2">
-                <span>Uploading...</span>
+                <span>Uploading to Backblaze B2...</span>
                 <span>{Math.round(progress)}%</span>
               </div>
-              <div className="w-full bg-gray-200 rounded-full h-2">
+              <div className="w-full bg-gray-200 rounded-full h-3">
                 <div 
-                  className="bg-red-600 h-2 rounded-full transition-all duration-300"
+                  className="bg-red-600 h-3 rounded-full transition-all duration-300"
                   style={{ width: `${progress}%` }}
                 ></div>
               </div>
+              <p className="text-xs text-gray-500 mt-2 text-center">
+                Uploading to secure cloud storage...
+              </p>
             </div>
           )}
 
@@ -228,10 +277,14 @@ export default function SecretUpload() {
                 type="text"
                 value={videoInfo.title}
                 onChange={(e) => setVideoInfo(prev => ({ ...prev, title: e.target.value }))}
-                placeholder="Enter a descriptive title..."
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-colors"
+                placeholder="Enter a descriptive title for your video..."
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-colors disabled:bg-gray-100"
                 disabled={uploading}
+                maxLength={100}
               />
+              <p className="text-xs text-gray-500 mt-1">
+                {videoInfo.title.length}/100 characters
+              </p>
             </div>
 
             <div>
@@ -241,11 +294,15 @@ export default function SecretUpload() {
               <textarea
                 value={videoInfo.description}
                 onChange={(e) => setVideoInfo(prev => ({ ...prev, description: e.target.value }))}
-                placeholder="Describe your video..."
+                placeholder="Describe your video... (optional)"
                 rows="3"
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-colors resize-none"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 transition-colors resize-none disabled:bg-gray-100"
                 disabled={uploading}
+                maxLength={500}
               />
+              <p className="text-xs text-gray-500 mt-1">
+                {videoInfo.description.length}/500 characters
+              </p>
             </div>
           </div>
 
@@ -262,12 +319,12 @@ export default function SecretUpload() {
             {uploading ? (
               <div className="flex items-center justify-center">
                 <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-3"></div>
-                Uploading...
+                Uploading... {Math.round(progress)}%
               </div>
             ) : (
               <div className="flex items-center justify-center">
-                <Upload className="h-5 w-5 mr-2" />
-                Upload Video
+                <FileVideo className="h-5 w-5 mr-2" />
+                Upload to Backblaze B2
               </div>
             )}
           </button>
@@ -281,14 +338,20 @@ export default function SecretUpload() {
             }`}>
               <div className="flex items-center">
                 {uploadStatus.type === 'success' ? (
-                  <CheckCircle className="h-5 w-5 mr-2" />
+                  <CheckCircle className="h-5 w-5 mr-2 flex-shrink-0" />
                 ) : (
-                  <AlertCircle className="h-5 w-5 mr-2" />
+                  <AlertCircle className="h-5 w-5 mr-2 flex-shrink-0" />
                 )}
-                {uploadStatus.message}
+                <span>{uploadStatus.message}</span>
               </div>
             </div>
           )}
+        </div>
+
+        {/* Storage Info */}
+        <div className="mt-8 text-center text-sm text-gray-500">
+          <p>🔒 Videos are securely stored on Backblaze B2 Cloud Storage</p>
+          <p>🌐 10GB free storage • Global CDN • Instant streaming</p>
         </div>
 
         {/* Secret Note */}
